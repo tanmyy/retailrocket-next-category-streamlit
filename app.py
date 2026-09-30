@@ -5,6 +5,11 @@ ARTIFACT CONTRACT (drop the winning training run's files into ./artifacts/):
     best_model.keras      the winning model (LSTM or GRU), full save via model.save()
     item_to_index.pkl     dict: raw item ID (int) -> model input index (int)
     index_to_category.pkl dict: model output index (int) -> raw category ID
+    item_to_category.pkl  dict: raw item ID (int) -> category index (int), required
+                          when the model takes a second "last viewed category"
+                          input (as the GRU winner does). Training's input vocab
+                          is 0 = pad, 1 = unknown, 2..807 = the 806 categories
+                          in index_to_category order.
     user_histories.pkl    dict: user ID -> list of raw item IDs, oldest first
     metrics.json          {"model_type": "LSTM"|"GRU", "top1_acc": 67.42, "top5_acc": 76.97}
     demo_results.csv      optional, 10-user demo table (same columns as before)
@@ -34,6 +39,7 @@ FILES = {
     "model": ART_DIR / "best_model.keras",
     "item_to_index": ART_DIR / "item_to_index.pkl",
     "index_to_category": ART_DIR / "index_to_category.pkl",
+    "item_to_category": ART_DIR / "item_to_category.pkl",
     "user_histories": ART_DIR / "user_histories.pkl",
     "metrics": ART_DIR / "metrics.json",
     "demo_results": ART_DIR / "demo_results.csv",
@@ -64,6 +70,10 @@ def load_artifacts():
     metrics = {}
     if FILES["metrics"].exists():
         metrics = json.loads(FILES["metrics"].read_text())
+    item_to_category = None
+    if FILES["item_to_category"].exists():
+        with open(FILES["item_to_category"], "rb") as f:
+            item_to_category = {int(k): int(v) for k, v in pickle.load(f).items()}
     shape = model.input_shape
     if isinstance(shape, list):
         # Multi-input winner (GRU: item history + last-viewed-item category).
@@ -78,6 +88,7 @@ def load_artifacts():
         "model": model,
         "item_to_index": item_to_index,
         "index_to_category": index_to_category,
+        "item_to_category": item_to_category,
         "needs_last_category": needs_last_category,
         "user_histories": user_histories,
         "user_ids": sorted(user_histories.keys()),
@@ -104,10 +115,12 @@ def top5_for_history(raw_ids, art):
         return None, 0
     x = pad_sequences([seq], maxlen=art["seq_len"], padding="pre", truncating="pre")
     if art["needs_last_category"]:
-        # Training-time experiment input: feed a neutral constant so the
-        # prediction comes from the item history alone.
+        # Full GRU + last-category setup: category index of the last viewed item.
+        last_cat = art["item_to_category"].get(
+            int(raw_ids[-1]), UNKNOWN_CATEGORY_INDEX
+        )
         probs = art["model"].predict(
-            [x, np.array([[UNKNOWN_CATEGORY_INDEX]])], verbose=0
+            [x, np.array([[last_cat]])], verbose=0
         )[0]
     else:
         probs = art["model"].predict(x, verbose=0)[0]
@@ -143,10 +156,19 @@ def show_prediction(rows, art, caption):
 # ------------------------------------------------------------------ header
 art = load_artifacts()
 
-# Neutral constant fed to the model's second ("last viewed category") input,
-# which was only a training-time experiment. Predictions come from the item
-# history alone.
-UNKNOWN_CATEGORY_INDEX = 0
+# Category index fed to the model's second input when the last viewed item's
+# category is unknown. Training reserved 0 = pad and 1 = unknown in the input
+# vocabulary (real categories sit at 2..807), so 1 is the honest fallback.
+UNKNOWN_CATEGORY_INDEX = 1
+
+if art["needs_last_category"] and art["item_to_category"] is None:
+    st.title("🛒 What will this shopper click next?")
+    st.error(
+        "This model needs `artifacts/item_to_category.pkl` (raw item ID to "
+        "category index) for its second input. The file is missing, so the app "
+        "can't run the full model. Add it and redeploy."
+    )
+    st.stop()
 
 st.title("🛒 What will this shopper click next?")
 st.write(
@@ -280,9 +302,17 @@ else:
     )
 
 st.divider()
-st.caption(
-    f"Methodology note: {m.get('top1_acc', 0):.1f}% top-1 / {m.get('top5_acc', 0):.1f}% "
-    f"top-5 are the {m.get('model_type', 'model')}'s test-set scores with its "
-    "last-category input (a training experiment). The live predictor above uses "
-    "browsing history alone, so treat its outputs as illustrative."
-)
+_full_setup = art["needs_last_category"] and art["item_to_category"] is not None
+if _full_setup:
+    st.caption(
+        f"Methodology note: {m.get('top1_acc', 0):.1f}% top-1 / {m.get('top5_acc', 0):.1f}% "
+        f"top-5 are the {m.get('model_type', 'model')}'s test-set scores. The live "
+        "predictor above runs the same full model on the shopper's history."
+    )
+else:
+    st.caption(
+        f"Methodology note: {m.get('top1_acc', 0):.1f}% top-1 / {m.get('top5_acc', 0):.1f}% "
+        f"top-5 are the {m.get('model_type', 'model')}'s test-set scores with its "
+        "last-category input (a training experiment). The live predictor above uses "
+        "browsing history alone, so treat its outputs as illustrative."
+    )
