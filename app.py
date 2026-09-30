@@ -9,8 +9,11 @@ ARTIFACT CONTRACT (drop the winning training run's files into ./artifacts/):
     metrics.json          {"model_type": "LSTM"|"GRU", "top1_acc": 67.42, "top5_acc": 76.97}
     demo_results.csv      optional, 10-user demo table (same columns as before)
 
-The app reads the sequence length and category count straight from the model
-file, so a retrained winner with different shapes just works.
+The app reads the sequence length, category count, and number of model inputs
+straight from the model file, so a retrained winner with different shapes
+just works. Note: the GRU winner has a second "last viewed category" input
+that was only a training-time experiment. The app feeds it a neutral constant
+(UNKNOWN_CATEGORY_INDEX) and predicts from the item history alone.
 """
 
 from __future__ import annotations
@@ -61,13 +64,24 @@ def load_artifacts():
     metrics = {}
     if FILES["metrics"].exists():
         metrics = json.loads(FILES["metrics"].read_text())
+    shape = model.input_shape
+    if isinstance(shape, list):
+        # Multi-input winner (GRU: item history + last-viewed-item category).
+        # The category input was a training-time experiment; the app feeds it
+        # a neutral constant and predicts from the item history alone.
+        seq_len = int(shape[0][1])
+        needs_last_category = True
+    else:
+        seq_len = int(shape[1])
+        needs_last_category = False
     return {
         "model": model,
         "item_to_index": item_to_index,
         "index_to_category": index_to_category,
+        "needs_last_category": needs_last_category,
         "user_histories": user_histories,
         "user_ids": sorted(user_histories.keys()),
-        "seq_len": int(model.input_shape[1]),
+        "seq_len": seq_len,
         "n_categories": int(model.output_shape[1]),
         "params": int(model.count_params()),
         "metrics": metrics,
@@ -89,7 +103,14 @@ def top5_for_history(raw_ids, art):
     if not seq:
         return None, 0
     x = pad_sequences([seq], maxlen=art["seq_len"], padding="pre", truncating="pre")
-    probs = art["model"].predict(x, verbose=0)[0]
+    if art["needs_last_category"]:
+        # Training-time experiment input: feed a neutral constant so the
+        # prediction comes from the item history alone.
+        probs = art["model"].predict(
+            [x, np.array([[UNKNOWN_CATEGORY_INDEX]])], verbose=0
+        )[0]
+    else:
+        probs = art["model"].predict(x, verbose=0)[0]
     order = np.argsort(probs)[-5:][::-1]
     rows = [
         (art["index_to_category"].get(int(i), str(i)), float(probs[i]) * 100)
@@ -121,6 +142,11 @@ def show_prediction(rows, art, caption):
 
 # ------------------------------------------------------------------ header
 art = load_artifacts()
+
+# Neutral constant fed to the model's second ("last viewed category") input,
+# which was only a training-time experiment. Predictions come from the item
+# history alone.
+UNKNOWN_CATEGORY_INDEX = 0
 
 st.title("🛒 What will this shopper click next?")
 st.write(
@@ -248,10 +274,15 @@ if FILES["demo_results"].exists():
         "Recorded notebook results for illustration, not the official test evaluation."
     )
 else:
-    st.info("Recorded demo results will appear here once the final model lands.")
+    st.info(
+        "Recorded demo results for the new model are on the way. "
+        "The live predictor above already runs it."
+    )
 
 st.divider()
 st.caption(
-    "Methodology note: the model was evaluated on a held-out test split of "
-    "interaction sequences. The 10-shopper demo above is illustrative only."
+    f"Methodology note: {m.get('top1_acc', 0):.1f}% top-1 / {m.get('top5_acc', 0):.1f}% "
+    f"top-5 are the {m.get('model_type', 'model')}'s test-set scores with its "
+    "last-category input (a training experiment). The live predictor above uses "
+    "browsing history alone, so treat its outputs as illustrative."
 )

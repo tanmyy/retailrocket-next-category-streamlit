@@ -1,1 +1,1 @@
-{"model_type": "LSTM", "top1_acc": 67.42, "top5_acc": 76.97}
+{"model_type":"GRU","top1_acc":65.56,"top5_acc":70.14}
