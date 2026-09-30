@@ -255,4 +255,3 @@ st.caption(
     "Methodology note: the model was evaluated on a held-out test split of "
     "interaction sequences. The 10-shopper demo above is illustrative only."
 )
-st.caption("Built by Tanmay Kataria.")
