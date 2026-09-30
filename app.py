@@ -236,11 +236,12 @@ st.divider()
 st.subheader("Does it actually work?")
 if FILES["demo_results"].exists():
     df = pd.read_csv(FILES["demo_results"])
-    top1 = float(df["Top-1 Correct"].mean()) * 100
-    top5 = float(df["Top-5 Correct"].mean()) * 100
+    n = len(df)
+    top1_n = int(df["Top-1 Correct"].sum())
+    top5_n = int(df["Top-5 Correct"].sum())
     st.write(
-        f"On 10 sample shoppers from the notebook: **{top1:.0f}/10 correct "
-        f"first guess, {top5:.0f}/10 in the top 5.**"
+        f"On {n} sample shoppers from the notebook: **{top1_n}/{n} correct "
+        f"first guess, {top5_n}/{n} in the top 5.**"
     )
     st.dataframe(df, hide_index=True, use_container_width=True)
     st.caption(
